@@ -148,7 +148,7 @@ class Recommender(BaseEstimator):
 
         # Have sklearn check the that fit has been called previously, and
         # have sklearn check and convert the inputs.
-        check_is_fitted(self, ['index_to_user_map_', 'index_to_item_map_'])
+        check_is_fitted(self, ['index_to_user_map_', 'index_to_item_map_', 'train_step_op'])
         X = check_array(X, dtype=None, estimator=self)
 
         # In our specific case (a recommender engine), there should be exactly two features.
@@ -156,12 +156,12 @@ class Recommender(BaseEstimator):
         if X.shape[1] != 2: raise ValueError("X must have exactly 2 features")
 
         # Pull out the columns into better variable names.
-        user_array   = X[:,0]
-        item_array   = X[:,1]
+        user_array = X[:,0]
+        item_array = X[:,1]
 
         # Prep the data by converting the users and items to the same 0-based
         # indices used by the `fit()` method.
-        user_indices, item_indices, num_users, num_items = \
+        user_indices, item_indices = \
                 self._prep_data_for_predict(user_array, item_array)
 
         # Make the predictions.
@@ -178,11 +178,11 @@ class Recommender(BaseEstimator):
         # to go back-and-forth to convert from 0-based index to original value
         # and back again.
         user_indices, self.user_to_index_map_, self.index_to_user_map_ = \
-                Recommender._convert_to_indices(user_array)
+                Recommender._convert_to_indices(user_array, allow_new_entries=True)
 
         # Same for the `item_id`s.
         item_indices, self.item_to_index_map_, self.index_to_item_map_ = \
-                Recommender._convert_to_indices(item_array)
+                Recommender._convert_to_indices(item_array, allow_new_entries=True)
 
         # Note the number of unique users and items.
         num_users = len(self.user_to_index_map_)
@@ -197,34 +197,39 @@ class Recommender(BaseEstimator):
         # so we want to convert them to be 0-based indices. We'll also keep maps
         # to go back-and-forth to convert from 0-based index to original value
         # and back again.
-        user_indices, self.user_to_index_map_, self.index_to_user_map_ = \
+        user_indices, _, _ = \
                 Recommender._convert_to_indices(user_array, self.user_to_index_map_, self.index_to_user_map_)
 
         # Same for the `item_id`s.
-        item_indices, self.item_to_index_map_, self.index_to_item_map_ = \
+        item_indices, _, _ = \
                 Recommender._convert_to_indices(item_array, self.item_to_index_map_, self.index_to_item_map_)
 
-        # Note the number of unique users and items.
-        num_users = len(self.user_to_index_map_)
-        num_items = len(self.item_to_index_map_)
-
-        return user_indices, item_indices, num_users, num_items
+        return user_indices, item_indices
 
     @staticmethod
-    def _convert_to_indices(values, value_to_index_map=None, index_to_value_map=None):
+    def _convert_to_indices(values, value_to_index_map=None, index_to_value_map=None, allow_new_entries=False):
         """Static helper method to convert opaque user- and item- values
         into 0-based-indices.
         """
+        indices = []
         if value_to_index_map is None:
-            value_to_index_map = {}
+            value_to_index_map = {'__unknown__': 0}
         if index_to_value_map is None:
-            index_to_value_map = {}
-        for value in values:
-            if value not in value_to_index_map:
-                next_index = len(value_to_index_map)
-                value_to_index_map[value] = next_index
-                index_to_value_map[next_index] = value
-        indices = np.array([value_to_index_map[value] for value in values])
+            index_to_value_map = {0: '__unknown__'}
+        if allow_new_entries:
+            for value in values:
+                if value not in value_to_index_map:
+                    next_index = len(value_to_index_map)
+                    value_to_index_map[value] = next_index
+                    index_to_value_map[next_index] = value
+                indices.append(value_to_index_map[value])
+        else:
+            for value in values:
+                if value not in value_to_index_map:
+                    indices.append(0)
+                else:
+                    indices.append(value_to_index_map[value])
+        indices = np.array(indices)
         return indices, value_to_index_map, index_to_value_map
 
     def _build_computation_graph(self, dtype, num_users, num_items):
