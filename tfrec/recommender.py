@@ -67,15 +67,24 @@ class Recommender(BaseEstimator):
             The ratings (`N` samples) corresponding to the user-item data
             held in `X`.
 
+        lambda_factors : float-like, optional (default=None)
+            If not None, then override the `lambda_factors` given to `__init__()`.
+
+        lambda_biases : float-like, optional (default=None)
+            If not None, then override the `lambda_biases` given to `__init__()`.
+
         n_iter : int, optional (default=None)
             If not None, then override the `n_iter` given to `__init__()`.
+
+        learning_rate : float-like, optional (default=None)
+            If not None, then override the `learning_rate` given to `__init__()`.
+
+        batch_size : int, optional (default=None)
+            If not None, then override the `batch_size` given to `__init__()`.
 
         tune : bool, optional (default=False)
             If `fit()` was previously called, then pick up where it left off by training
             for more iterations with the given `X` and `y`.
-
-        batch_size : int, optional (default=None)
-            If not None, then override the `batch_size` given to `__init__()`.
 
         verbose : bool, optional (default=False)
             If True, log verbose output.
@@ -144,7 +153,7 @@ class Recommender(BaseEstimator):
                                           include_unknown_records,
                                           old_U_concat_bias_var, old_V_concat_bias_var)
 
-        # Start the TensorFlow session.
+        # Start the TensorFlow session and initialize the variables.
         if self.sess is None:
             self.sess = tf.Session()
         self._init_variables()
@@ -158,6 +167,9 @@ class Recommender(BaseEstimator):
         if log is None:
             log = LOCAL_LOG
         self._run_gradient_descent(user_indices, item_indices, rating_array,
+                                   kwargs.get('lambda_factors', self.lambda_factors),
+                                   kwargs.get('lambda_biases', self.lambda_biases),
+                                   kwargs.get('learning_rate', self.learning_rate),
                                    kwargs.get('n_iter', self.n_iter),
                                    kwargs.get('batch_size', self.batch_size),
                                    kwargs.get('verbose', False),
@@ -429,6 +441,7 @@ class Recommender(BaseEstimator):
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
+                              lambda_factors, lambda_biases, learning_rate,
                               num_steps, batch_size, verbose, log):
         """
         Trains for (S)GD iterations, and returns the RMSE of the entire training set.
@@ -448,9 +461,9 @@ class Recommender(BaseEstimator):
             log.info("training set RMSE = {}".format(begin_rmse))
 
         hyperparam_dict = {
-            self.alpha_placeholder: self.learning_rate,
-            self.lambda_factors_placeholder: self.lambda_factors,
-            self.lambda_biases_placeholder: self.lambda_biases
+            self.alpha_placeholder: learning_rate,
+            self.lambda_factors_placeholder: lambda_factors,
+            self.lambda_biases_placeholder: lambda_biases
         }
 
         for _ in range(num_steps):

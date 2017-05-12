@@ -13,7 +13,7 @@ def _getRootLogger():
 
 def _getFormatter():
     """Return a formatter that does a good job showing helpful information."""
-    fmt = '%(asctime)s: %(name)-15s: %(levelname)-10s: %(message)s'
+    fmt = '%(asctime)s: %(name)-18s: %(levelname)-10s: %(message)s'
     formatter = logging.Formatter(fmt)
     return formatter
 
