@@ -52,6 +52,7 @@ class Recommender(BaseEstimator):
         self.n_iter = n_iter
         self.learning_rate = learning_rate
         self.batch_size = batch_size
+        self.sess = None
 
     def fit(self, X, y, **kwargs):
         """Fit on user-item ratings data.
@@ -111,7 +112,7 @@ class Recommender(BaseEstimator):
 
         # Build the TensorFlow computation graph!
         dtype = tf.float32 if (self.dtype == 'float32') else tf.float64
-        self._build_computation_graph(dtype, num_users, num_items)
+        self._build_computation_graph(dtype, num_users, num_items, include_unknown_records=True)
 
         # Start the TensorFlow session.
         self._start_session()
@@ -232,7 +233,7 @@ class Recommender(BaseEstimator):
         indices = np.array(indices)
         return indices, value_to_index_map, index_to_value_map
 
-    def _build_computation_graph(self, dtype, num_users, num_items):
+    def _build_computation_graph(self, dtype, new_num_users, new_num_items, include_unknown_records):
 
         # Create the user, item, and rating tf placeholders.
         self.user_indices_placeholder = tf.placeholder(dtype=tf.int32, name="user_indices")
@@ -263,39 +264,46 @@ class Recommender(BaseEstimator):
                                                              name="init_factor_stddev")
 
         # U will represent user-factors, and V will represent item-factors.
-        self.U_var = tf.Variable(tf.truncated_normal([num_users-1, self.k],
+        if include_unknown_records:
+            U_rows = new_num_users-1
+            V_cols = new_num_items-1
+        else:
+            U_rows = new_num_users
+            V_cols = new_num_items
+        self.U_var = tf.Variable(tf.truncated_normal([U_rows, self.k],
                                                      mean=self.init_factor_mean_placeholder,
                                                      stddev=self.init_factor_stddev_placeholder,
                                                      dtype=dtype),
-                                 name="user_factors_no_unknown_row")
-        self.U_var = tf.concat([tf.zeros([1, self.k]),
-                                self.U_var],
-                               0,
-                               name="user_factors")
-        self.V_var = tf.Variable(tf.truncated_normal([self.k, num_items-1],
+                                 name="user_factors_1")
+        self.V_var = tf.Variable(tf.truncated_normal([self.k, V_cols],
                                                       mean=self.init_factor_mean_placeholder,
                                                       stddev=self.init_factor_stddev_placeholder,
                                                       dtype=dtype),
-                                 name="item_factors_no_unknown_col")
-        self.V_var = tf.concat([tf.zeros([self.k, 1]),
-                                self.V_var],
-                               1,
-                               name="item_factors")
+                                 name="item_factors_1")
+        if include_unknown_records:
+            self.U_var = tf.concat([tf.zeros([1, self.k]),
+                                    self.U_var],
+                                   0,
+                                   name="user_factors_2")
+            self.V_var = tf.concat([tf.zeros([self.k, 1]),
+                                    self.V_var],
+                                   1,
+                                   name="item_factors_2")
 
         # Build the user- and item-bias vectors.
-        self.user_biases_var = tf.Variable(tf.zeros([num_users, 1], dtype=dtype),
+        self.user_biases_var = tf.Variable(tf.zeros([new_num_users, 1], dtype=dtype),
                                            name="user_biases")
-        self.item_biases_var = tf.Variable(tf.zeros([1, num_items], dtype=dtype),
+        self.item_biases_var = tf.Variable(tf.zeros([1, new_num_items], dtype=dtype),
                                            name="item_biases")
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
         self.U_concat_bias_var = tf.concat([self.U_var,
                                             self.user_biases_var,
-                                            tf.ones([num_users, 1], dtype=dtype)],
+                                            tf.ones([new_num_users, 1], dtype=dtype)],
                                            1,
                                            name="user_factors_concat_user_biases")
         self.V_concat_bias_var = tf.concat([self.V_var,
-                                            tf.ones([1, num_items], dtype=dtype),
+                                            tf.ones([1, new_num_items], dtype=dtype),
                                             self.item_biases_var],
                                            0,
                                            name="item_factors_concat_item_biases")
@@ -366,9 +374,9 @@ class Recommender(BaseEstimator):
         }
 
         # The global variable initalization operation + a new TensorFlow Session!
-        self.sess = None
         init_op = tf.global_variables_initializer()
-        self.sess = tf.Session()
+        if self.sess is None:
+            self.sess = tf.Session()
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
