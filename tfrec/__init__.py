@@ -1,8 +1,12 @@
 from __future__ import division, absolute_import, print_function
+from . import logger
 import tensorflow as tf
 import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
+
+
+LOCAL_LOG = logger.easy_setup(__name__, console_output=True)
 
 
 class Recommender(BaseEstimator):
@@ -72,7 +76,11 @@ class Recommender(BaseEstimator):
             If not None, then override the `batch_size` given to `__init__()`.
 
         verbose : bool, optional (default=False)
-            If True, print verbose output.
+            If True, log verbose output.
+
+        log : logging.Logger, optional (default=LOCAL_LOG)
+            If given, use this `log` when printing verbose output; otherwise
+            use the `LOCAL_LOG`.
 
         Returns
         -------
@@ -108,7 +116,8 @@ class Recommender(BaseEstimator):
         self._run_gradient_descent(user_indices, item_indices, rating_array,
                                    kwargs.get('n_iter', self.n_iter),
                                    kwargs.get('batch_size', self.batch_size),
-                                   kwargs.get('verbose', False))
+                                   kwargs.get('verbose', False),
+                                   kwargs.get('log', LOCAL_LOG))
 
         return self
 
@@ -337,7 +346,7 @@ class Recommender(BaseEstimator):
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
-                              num_steps, batch_size, verbose):
+                              num_steps, batch_size, verbose, log):
         """
         Trains for (S)GD iterations, and returns the RMSE of the entire training set.
         """
@@ -351,8 +360,9 @@ class Recommender(BaseEstimator):
         }
 
         if verbose:
+            log.info("Starting {}Gradient Descent".format('Stochastic ' if batch_size>0 else ''))
             begin_rmse = self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
-            print("(begin) training set RMSE =", begin_rmse)
+            log.info("training set RMSE = {}".format(begin_rmse))
 
         hyperparam_dict = {
             self.alpha_placeholder: self.learning_rate,
@@ -376,8 +386,9 @@ class Recommender(BaseEstimator):
             feed_dict.update(hyperparam_dict)
             self.train_step_op.run(session=self.sess, feed_dict=feed_dict)
             if verbose:
+                log.info("Finished iteration #{}".format(i))
                 curr_rmse = self.rmse_op.eval(session=self.sess, feed_dict=feed_dict)
-                print("(iter {}) {}training set RMSE = {}".format(i, prefix, curr_rmse))
+                log.info("{}training set RMSE = {}".format(prefix, curr_rmse))
 
         return self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
 
