@@ -112,7 +112,10 @@ class Recommender(BaseEstimator):
 
         # Build the TensorFlow computation graph!
         dtype = tf.float32 if (self.dtype == 'float32') else tf.float64
-        self._build_computation_graph(dtype, num_users, num_items, include_unknown_records=True)
+        self._build_computation_graph(dtype,
+                                      num_users, num_items,
+                                      include_unknown_records=True,
+                                      old_U_concat_bias_var=None, old_V_concat_bias_var=None)
 
         # Start the TensorFlow session.
         self._start_session()
@@ -233,7 +236,10 @@ class Recommender(BaseEstimator):
         indices = np.array(indices)
         return indices, value_to_index_map, index_to_value_map
 
-    def _build_computation_graph(self, dtype, new_num_users, new_num_items, include_unknown_records):
+    def _build_computation_graph(self, dtype,
+                                 new_num_users, new_num_items,
+                                 include_unknown_records,
+                                 old_U_concat_bias_var, old_V_concat_bias_var):
 
         # Create the user, item, and rating tf placeholders.
         self.user_indices_placeholder = tf.placeholder(dtype=tf.int32, name="user_indices")
@@ -265,17 +271,17 @@ class Recommender(BaseEstimator):
 
         # U will represent user-factors, and V will represent item-factors.
         if include_unknown_records:
-            U_rows = new_num_users-1
-            V_cols = new_num_items-1
+            num_U_rows = new_num_users-1
+            num_V_cols = new_num_items-1
         else:
-            U_rows = new_num_users
-            V_cols = new_num_items
-        self.U_var = tf.Variable(tf.truncated_normal([U_rows, self.k],
+            num_U_rows = new_num_users
+            num_V_cols = new_num_items
+        self.U_var = tf.Variable(tf.truncated_normal([num_U_rows, self.k],
                                                      mean=self.init_factor_mean_placeholder,
                                                      stddev=self.init_factor_stddev_placeholder,
                                                      dtype=dtype),
                                  name="user_factors_1")
-        self.V_var = tf.Variable(tf.truncated_normal([self.k, V_cols],
+        self.V_var = tf.Variable(tf.truncated_normal([self.k, num_V_cols],
                                                       mean=self.init_factor_mean_placeholder,
                                                       stddev=self.init_factor_stddev_placeholder,
                                                       dtype=dtype),
@@ -307,6 +313,19 @@ class Recommender(BaseEstimator):
                                             self.item_biases_var],
                                            0,
                                            name="item_factors_concat_item_biases")
+
+        # If we are doing extended training (i.e. we are picking up where the last
+        # training left off), then we will extend the user-factors and item-factors.
+        if old_U_concat_bias_var is not None:
+            self.U_concat_bias_var = tf.concat([old_U_concat_bias_var,
+                                                self.U_concat_bias_var],
+                                               0,
+                                               name="user_factors_concat_user_biases")
+        if old_V_concat_bias_var is not None:
+            self.V_concat_bias_var = tf.concat([old_V_concat_bias_var,
+                                                self.V_concat_bias_var],
+                                               1,
+                                               name="item_factors_concat_item_biases")
 
         # The model:
         self.centered_reconstruction_op = tf.matmul(self.U_concat_bias_var, self.V_concat_bias_var,
