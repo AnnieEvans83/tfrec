@@ -105,17 +105,43 @@ class Recommender(BaseEstimator):
         item_array   = X[:,1]
         rating_array = y
 
+        # Do the tuning logic:
+        tune = kwargs.get('tune', False)
+        if tune and getattr(self, 'U_concat_bias_var', False) and getattr(self, 'V_concat_bias_var', False):
+            include_unknown_records = False
+            old_U_concat_bias_var = self.U_concat_bias_var
+            old_V_concat_bias_var = self.V_concat_bias_var
+        else:
+            include_unknown_records = True
+            old_U_concat_bias_var = None
+            old_V_concat_bias_var = None
+            self.user_to_index_map_ = None
+            self.index_to_user_map_ = None
+            self.item_to_index_map_ = None
+            self.index_to_item_map_ = None
+            self.num_users = 0
+            self.num_items = 0
+            self.completed_iters = 0
+            self.mu_ = rating_array.mean()
+
         # Prepare the data by creating 0-based indices for the users and items,
         # and by counting number of unique users and items.
         user_indices, item_indices, num_users, num_items = \
                 self._prep_data_for_train(user_array, item_array, rating_array)
 
+        # Keep track of how many new users and new itesm we have here.
+        new_num_users = num_users - self.num_users
+        new_num_items = num_items - self.num_items
+        self.num_users = num_users
+        self.num_items = num_items
+
         # Build the TensorFlow computation graph!
         dtype = tf.float32 if (self.dtype == 'float32') else tf.float64
-        self._build_computation_graph(dtype,
-                                      num_users, num_items,
-                                      include_unknown_records=True,
-                                      old_U_concat_bias_var=None, old_V_concat_bias_var=None)
+        if new_num_users > 0 or new_num_items > 0:
+            self._build_computation_graph(dtype,
+                                          new_num_users, new_num_items,
+                                          include_unknown_records,
+                                          old_U_concat_bias_var, old_V_concat_bias_var)
 
         # Start the TensorFlow session.
         self._start_session()
@@ -152,7 +178,7 @@ class Recommender(BaseEstimator):
 
         # Have sklearn check the that fit has been called previously, and
         # have sklearn check and convert the inputs.
-        check_is_fitted(self, ['index_to_user_map_', 'index_to_item_map_', 'train_step_op'])
+        check_is_fitted(self, ['train_step_op'])
         X = check_array(X, dtype=None, estimator=self)
 
         # In our specific case (a recommender engine), there should be exactly two features.
@@ -174,19 +200,18 @@ class Recommender(BaseEstimator):
     def _prep_data_for_train(self, user_array, item_array, rating_array):
         """Private helper method to prep the training set."""
 
-        # Compute the global average rating.
-        self.mu_ = rating_array.mean()
-
         # The `user_id`s can be anything (strings, large integers, whatever),
         # so we want to convert them to be 0-based indices. We'll also keep maps
         # to go back-and-forth to convert from 0-based index to original value
         # and back again.
         user_indices, self.user_to_index_map_, self.index_to_user_map_ = \
-                Recommender._convert_to_indices(user_array, allow_new_entries=True)
+                Recommender._convert_to_indices(user_array, self.user_to_index_map_, self.index_to_user_map_,
+                                                allow_new_entries=True)
 
         # Same for the `item_id`s.
         item_indices, self.item_to_index_map_, self.index_to_item_map_ = \
-                Recommender._convert_to_indices(item_array, allow_new_entries=True)
+                Recommender._convert_to_indices(item_array, self.item_to_index_map_, self.index_to_item_map_,
+                                                allow_new_entries=True)
 
         # Note the number of unique users and items.
         num_users = len(self.user_to_index_map_)
@@ -211,7 +236,7 @@ class Recommender(BaseEstimator):
         return user_indices, item_indices
 
     @staticmethod
-    def _convert_to_indices(values, value_to_index_map=None, index_to_value_map=None, allow_new_entries=False):
+    def _convert_to_indices(values, value_to_index_map, index_to_value_map, allow_new_entries=False):
         """Static helper method to convert opaque user- and item- values
         into 0-based-indices.
         """
