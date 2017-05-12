@@ -136,6 +136,7 @@ class Recommender(BaseEstimator):
         self.num_items = num_items
 
         # Build the TensorFlow computation graph!
+        self.needs_init = set()
         dtype = tf.float32 if (self.dtype == 'float32') else tf.float64
         if new_num_users > 0 or new_num_items > 0:
             self._build_computation_graph(dtype,
@@ -313,6 +314,8 @@ class Recommender(BaseEstimator):
                                                       stddev=self.init_factor_stddev_placeholder,
                                                       dtype=dtype),
                                  name="item_factors_1")
+        self.needs_init.add(self.U_var)
+        self.needs_init.add(self.V_var)
         if include_unknown_records:
             self.U_var = tf.concat([tf.zeros([1, self.k]),
                                     self.U_var],
@@ -328,6 +331,8 @@ class Recommender(BaseEstimator):
                                            name="user_biases")
         self.item_biases_var = tf.Variable(tf.zeros([1, new_num_items], dtype=dtype),
                                            name="item_biases")
+        self.needs_init.add(self.user_biases_var)
+        self.needs_init.add(self.item_biases_var)
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
         self.U_concat_bias_var = tf.concat([self.U_var,
@@ -420,7 +425,7 @@ class Recommender(BaseEstimator):
         }
 
         # The global variable initalization operation + a new TensorFlow Session!
-        init_op = tf.global_variables_initializer()
+        init_op = tf.variables_initializer(self.needs_init)
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
