@@ -263,16 +263,24 @@ class Recommender(BaseEstimator):
                                                              name="init_factor_stddev")
 
         # U will represent user-factors, and V will represent item-factors.
-        self.U_var = tf.Variable(tf.truncated_normal([num_users, self.k],
+        self.U_var = tf.Variable(tf.truncated_normal([num_users-1, self.k],
                                                      mean=self.init_factor_mean_placeholder,
                                                      stddev=self.init_factor_stddev_placeholder,
                                                      dtype=dtype),
-                                 name="user_factors")
-        self.V_var = tf.Variable(tf.truncated_normal([self.k, num_items],
+                                 name="user_factors_no_unknown_row")
+        self.U_var = tf.concat([tf.zeros([1, self.k]),
+                                self.U_var],
+                               0,
+                               name="user_factors")
+        self.V_var = tf.Variable(tf.truncated_normal([self.k, num_items-1],
                                                       mean=self.init_factor_mean_placeholder,
                                                       stddev=self.init_factor_stddev_placeholder,
                                                       dtype=dtype),
-                                 name="item_factors")
+                                 name="item_factors_no_unknown_col")
+        self.V_var = tf.concat([tf.zeros([self.k, 1]),
+                                self.V_var],
+                               1,
+                               name="item_factors")
 
         # Build the user- and item-bias vectors.
         self.user_biases_var = tf.Variable(tf.zeros([num_users, 1], dtype=dtype),
