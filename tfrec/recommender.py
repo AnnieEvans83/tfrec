@@ -42,7 +42,7 @@ class Recommender(BaseEstimator):
     def __init__(self, k=8, dtype='float32',
                        lambda_factors=0.1, lambda_biases=1e-4,
                        init_factor_mean=0.0, init_factor_stddev=0.01,
-                       n_iter=50, learning_rate=0.00001, batch_size=-1):
+                       n_iter=10, learning_rate=0.00001, batch_size=-1):
         self.k = k
         self.dtype = dtype
         self.lambda_factors = lambda_factors
@@ -390,10 +390,10 @@ class Recommender(BaseEstimator):
             else:
                 rand_indices = np.random.choice(len(rating_array), size=batch_size, replace=False)
                 feed_dict = {
-                    user_indices_placeholder: user_indices_all[rand_indices],
-                    item_indices_placeholder: item_indices_all[rand_indices],
-                    rating_array_placeholder: rating_array[rand_indices],
-                    mu_placeholder: mu
+                    self.user_indices_placeholder: user_indices[rand_indices],
+                    self.item_indices_placeholder: item_indices[rand_indices],
+                    self.rating_array_placeholder: rating_array[rand_indices],
+                    self.mu_placeholder: self.mu_
                 }
                 prefix = "approx. "
             feed_dict.update(hyperparam_dict)
