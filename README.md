@@ -1,4 +1,9 @@
 
+Requires:
+ tensorflow >= 1.0.0
+ sklearn
+
+
 TODO:
 
 - check parameters are all needed

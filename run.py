@@ -1,3 +1,4 @@
+from __future__ import division, absolute_import, print_function
 from tfrec import Recommender
 
 import pandas as pd
@@ -11,5 +12,5 @@ y = training_set['rating'].values
 
 model = Recommender()
 model.fit(X, y, verbose=True)
-print model.predict(X)
+print(model.predict(X))
 

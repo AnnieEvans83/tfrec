@@ -1,5 +1,6 @@
 from __future__ import division, absolute_import, print_function
 from . import logger
+from uuid import uuid4 as gen_uuid
 import tensorflow as tf
 import numpy as np
 from sklearn.base import BaseEstimator
@@ -81,6 +82,10 @@ class Recommender(BaseEstimator):
         log : logging.Logger, optional (default=LOCAL_LOG)
             If given, use this `log` when printing verbose output; otherwise
             use the `LOCAL_LOG`.
+            If the special string 'unique' is given, then create a unique
+            logger object for this recommender; such an operation is useful
+            if you are doing a parallel gridsearch so that each recommender
+            will build their own independent log output.
 
         Returns
         -------
@@ -113,11 +118,17 @@ class Recommender(BaseEstimator):
 
         # Tell TensorFlow to run gradient descent for us! (...doing several epochs,
         # and optionally doing SGD rather than full-batch)
+        log = kwargs.get('log', None)
+        if log == 'unique':
+            uuid = gen_uuid().hex[:12]
+            log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
+        if log is None:
+            log = LOCAL_LOG
         self._run_gradient_descent(user_indices, item_indices, rating_array,
                                    kwargs.get('n_iter', self.n_iter),
                                    kwargs.get('batch_size', self.batch_size),
                                    kwargs.get('verbose', False),
-                                   kwargs.get('log', LOCAL_LOG))
+                                   log)
 
         return self
 
@@ -265,13 +276,15 @@ class Recommender(BaseEstimator):
                                            name="item_biases")
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
-        self.U_concat_bias_var = tf.concat(1, [self.U_var,
-                                               self.user_biases_var,
-                                               tf.ones([num_users, 1], dtype=dtype)],
+        self.U_concat_bias_var = tf.concat([self.U_var,
+                                            self.user_biases_var,
+                                            tf.ones([num_users, 1], dtype=dtype)],
+                                           1,
                                            name="user_factors_concat_user_biases")
-        self.V_concat_bias_var = tf.concat(0, [self.V_var,
-                                               tf.ones([1, num_items], dtype=dtype),
-                                               self.item_biases_var],
+        self.V_concat_bias_var = tf.concat([self.V_var,
+                                            tf.ones([1, num_items], dtype=dtype),
+                                            self.item_biases_var],
+                                           0,
                                            name="item_factors_concat_item_biases")
 
         # The model:
@@ -297,9 +310,9 @@ class Recommender(BaseEstimator):
                                                        name="reconstruction_gather_ratings")
 
         # Calculate the reconstruction residuals.
-        self.residual_op = tf.sub(self.reconstruction_gather_ratings_op,
-                                  self.rating_array_placeholder,
-                                  name="residuals")
+        self.residual_op = tf.subtract(self.reconstruction_gather_ratings_op,
+                                       self.rating_array_placeholder,
+                                       name="residuals")
 
         # Calculate the RSS (residual sum of squares), MSE (mean squared error), and the RMSE (root mean squared error).
         self.rss_op = tf.reduce_sum(tf.square(self.residual_op), name="rss")
@@ -313,16 +326,16 @@ class Recommender(BaseEstimator):
         self.V_square_op = tf.square(self.V_var)
         self.V_sum_cols_op = tf.reduce_sum(self.V_square_op, 0)
         self.V_sum_penalty_op = tf.reduce_sum(tf.gather(self.V_sum_cols_op, self.item_indices_placeholder))
-        self.factor_regularizer_op = tf.mul(tf.add(self.U_sum_penalty_op, self.V_sum_penalty_op), self.lambda_factors_placeholder,
-                                            name="factor_regularizer")
+        self.factor_regularizer_op = tf.multiply(tf.add(self.U_sum_penalty_op, self.V_sum_penalty_op), self.lambda_factors_placeholder,
+                                                 name="factor_regularizer")
 
         # Declare the biases regularizer!!!
         self.user_biases_square_op = tf.square(self.user_biases_var)
         self.user_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.user_biases_square_op, [-1]), self.user_indices_placeholder))
         self.item_biases_square_op = tf.square(self.item_biases_var)
         self.item_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.item_biases_square_op, [-1]), self.item_indices_placeholder))
-        self.bias_regularizer_op = tf.mul(tf.add(self.user_biases_sum_op, self.item_biases_sum_op), self.lambda_biases_placeholder,
-                                          name="bias_regularizer")
+        self.bias_regularizer_op = tf.multiply(tf.add(self.user_biases_sum_op, self.item_biases_sum_op), self.lambda_biases_placeholder,
+                                               name="bias_regularizer")
 
         # Declare the cost function!!!
         self.cost_op = tf.add(self.rss_op, tf.add(self.factor_regularizer_op, self.bias_regularizer_op), name="cost")
