@@ -12,14 +12,17 @@ X = training_set[['user_id', 'joke_id']].values
 y = training_set['rating'].values
 
 model = Recommender()
-model.fit(X, y, verbose=True)
-y_pred = model.predict(X)
 
-manual_rmse = np.sqrt(np.mean((y_pred - y) ** 2))
-print('Manual Training RMSE:', manual_rmse)
+for _ in range(5):
 
-predictions = test_set.copy()
-predictions['rating'] = model.predict(test_set[['user_id', 'joke_id']].values)
-print('Test Set RMSE:', scoring.score_rmse(predictions))
-print('Test Set top-5-percent score:', scoring.score_top_5_percent(predictions))
+    model.fit(X, y, verbose=True, tune=True)
+    y_pred = model.predict(X)
+
+    manual_rmse = np.sqrt(np.mean((y_pred - y) ** 2))
+    print('Manual Training RMSE:', manual_rmse)
+
+    predictions = test_set.copy()
+    predictions['rating'] = model.predict(test_set[['user_id', 'joke_id']].values)
+    print('Test Set RMSE:', scoring.score_rmse(predictions))
+    print('Test Set top-5-percent score:', scoring.score_top_5_percent(predictions))
 

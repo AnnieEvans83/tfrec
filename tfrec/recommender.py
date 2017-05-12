@@ -107,7 +107,7 @@ class Recommender(BaseEstimator):
 
         # Do the tuning logic:
         tune = kwargs.get('tune', False)
-        if tune and getattr(self, 'U_concat_bias_var', False) and getattr(self, 'V_concat_bias_var', False):
+        if tune and getattr(self, 'U_concat_bias_var', None) is not None and getattr(self, 'V_concat_bias_var', None) is not None:
             include_unknown_records = False
             old_U_concat_bias_var = self.U_concat_bias_var
             old_V_concat_bias_var = self.V_concat_bias_var
@@ -127,7 +127,7 @@ class Recommender(BaseEstimator):
         # Prepare the data by creating 0-based indices for the users and items,
         # and by counting number of unique users and items.
         user_indices, item_indices, num_users, num_items = \
-                self._prep_data_for_train(user_array, item_array, rating_array)
+                self._prep_data_for_train(user_array, item_array)
 
         # Keep track of how many new users and new itesm we have here.
         new_num_users = num_users - self.num_users
@@ -144,7 +144,9 @@ class Recommender(BaseEstimator):
                                           old_U_concat_bias_var, old_V_concat_bias_var)
 
         # Start the TensorFlow session.
-        self._start_session()
+        if self.sess is None:
+            self.sess = tf.Session()
+        self._init_variables()
 
         # Tell TensorFlow to run gradient descent for us! (...doing several epochs,
         # and optionally doing SGD rather than full-batch)
@@ -197,7 +199,7 @@ class Recommender(BaseEstimator):
         # Make the predictions.
         return self._predict(user_indices, item_indices)
 
-    def _prep_data_for_train(self, user_array, item_array, rating_array):
+    def _prep_data_for_train(self, user_array, item_array):
         """Private helper method to prep the training set."""
 
         # The `user_id`s can be anything (strings, large integers, whatever),
@@ -409,8 +411,8 @@ class Recommender(BaseEstimator):
         self.optimizer = tf.train.GradientDescentOptimizer(self.alpha_placeholder)
         self.train_step_op = self.optimizer.minimize(self.cost_op)
 
-    def _start_session(self):
-        """Private helper to start a TensorFlow session and init the TensorFlow globals."""
+    def _init_variables(self):
+        """Private helper to init the TensorFlow globals."""
 
         init_params_dict = {
             self.init_factor_mean_placeholder: self.init_factor_mean,
@@ -419,8 +421,6 @@ class Recommender(BaseEstimator):
 
         # The global variable initalization operation + a new TensorFlow Session!
         init_op = tf.global_variables_initializer()
-        if self.sess is None:
-            self.sess = tf.Session()
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
@@ -438,7 +438,7 @@ class Recommender(BaseEstimator):
         }
 
         if verbose:
-            log.info("Starting {}Gradient Descent".format('Stochastic ' if batch_size>0 else ''))
+            log.info("Starting {}Gradient Descent for {} iterations".format('Stochastic ' if batch_size>0 else '', num_steps))
             begin_rmse = self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
             log.info("training set RMSE = {}".format(begin_rmse))
 
@@ -448,7 +448,7 @@ class Recommender(BaseEstimator):
             self.lambda_biases_placeholder: self.lambda_biases
         }
 
-        for i in range(num_steps):
+        for _ in range(num_steps):
             if batch_size <= 0:
                 feed_dict = dict(full_train_batch_feed)
                 prefix = ""
@@ -463,12 +463,16 @@ class Recommender(BaseEstimator):
                 prefix = "approx. "
             feed_dict.update(hyperparam_dict)
             self.train_step_op.run(session=self.sess, feed_dict=feed_dict)
+            self.completed_iters += 1
             if verbose:
-                log.info("Finished iteration #{}".format(i))
+                log.info("Finished iteration #{}".format(self.completed_iters))
                 curr_rmse = self.rmse_op.eval(session=self.sess, feed_dict=feed_dict)
                 log.info("{}training set RMSE = {}".format(prefix, curr_rmse))
 
-        return self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
+        if verbose:
+            log.info("Ending {}Gradient Descent".format('Stochastic ' if batch_size>0 else ''))
+            end_rmse = self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
+            log.info("training set RMSE = {}".format(end_rmse))
 
     def _predict(self, user_indices, item_indices):
 
