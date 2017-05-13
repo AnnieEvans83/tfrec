@@ -160,6 +160,15 @@ class Recommender(BaseEstimator):
         item_array   = X[:,1]
         rating_array = y
 
+        # Handle the optional verbosity parameters:
+        verbose = kwargs.get('verbose', False)
+        log = kwargs.get('log', None)
+        if log == 'unique':
+            uuid = gen_uuid().hex[:12]
+            log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
+        if log is None:
+            log = LOCAL_LOG
+
         # Do the tuning logic:
         tune = kwargs.get('tune', False)
         if tune and getattr(self, 'U_concat_bias_var', None) is not None and getattr(self, 'V_concat_bias_var', None) is not None:
@@ -169,6 +178,8 @@ class Recommender(BaseEstimator):
             include_unknown_records = False
             old_U_concat_bias_var = self.U_concat_bias_var
             old_V_concat_bias_var = self.V_concat_bias_var
+            if verbose:
+                log.info("will tune previous `fit()`")
         else:
             # In this case, we should start everything fresh, treating the current data as the
             # only data ever seen.
@@ -183,6 +194,8 @@ class Recommender(BaseEstimator):
             self.num_items = 0
             self.completed_iters = 0
             self.mu_ = rating_array.mean()
+            if verbose:
+                log.info("will `fit()` fresh")
 
         # Prepare the data by creating 0-based indices for the users and items,
         # and by counting number of unique users and items.
@@ -194,12 +207,15 @@ class Recommender(BaseEstimator):
         new_num_items = num_items - self.num_items
         self.num_users = num_users
         self.num_items = num_items
+        if verbose:
+            log.info("new_num_users: {}, new_num_items: {}".format(new_num_users, new_num_items))
+            log.info("num_users: {}, num_items: {}".format(num_users, num_items))
 
         # Build the TensorFlow computation graph!
         self.needs_init = set()
         dtype = tf.float32 if (self.dtype == 'float32') else tf.float64
         if new_num_users > 0 or new_num_items > 0:
-            self._build_computation_graph(dtype,
+            self._build_computation_graph(dtype, verbose, log,
                                           new_num_users, new_num_items,
                                           include_unknown_records,
                                           old_U_concat_bias_var, old_V_concat_bias_var)
@@ -207,23 +223,18 @@ class Recommender(BaseEstimator):
         # Start the TensorFlow session and initialize the variables.
         if self.sess is None:
             self.sess = tf.Session()
+            log.info("instantiated a new TensorFlow session")
         self._init_variables()
 
         # Tell TensorFlow to run gradient descent for us! (...doing several epochs,
         # and optionally doing SGD rather than full-batch)
-        log = kwargs.get('log', None)
-        if log == 'unique':
-            uuid = gen_uuid().hex[:12]
-            log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
-        if log is None:
-            log = LOCAL_LOG
         self._run_gradient_descent(user_indices, item_indices, rating_array,
                                    kwargs.get('lambda_factors', self.lambda_factors),
                                    kwargs.get('lambda_biases', self.lambda_biases),
                                    kwargs.get('learning_rate', self.learning_rate),
                                    kwargs.get('n_iter', self.n_iter),
                                    kwargs.get('batch_size', self.batch_size),
-                                   kwargs.get('verbose', False),
+                                   verbose,
                                    log)
 
         return self
@@ -336,7 +347,7 @@ class Recommender(BaseEstimator):
         indices = np.array(indices)
         return indices, value_to_index_map, index_to_value_map
 
-    def _build_computation_graph(self, dtype,
+    def _build_computation_graph(self, dtype, verbose, log,
                                  new_num_users, new_num_items,
                                  include_unknown_records,
                                  old_U_concat_bias_var, old_V_concat_bias_var):
