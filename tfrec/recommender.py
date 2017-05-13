@@ -6,7 +6,6 @@ import numpy as np
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
-
 LOCAL_LOG = logger.easy_setup(__name__, console_output=True)
 
 
@@ -43,6 +42,42 @@ class Recommender(BaseEstimator):
                        lambda_factors=0.1, lambda_biases=1e-4,
                        init_factor_mean=0.0, init_factor_stddev=0.01,
                        n_iter=10, learning_rate=0.00001, batch_size=-1):
+        """Build a Recommender object.
+
+        Parameters
+        ----------
+        k : int
+            The number of latent factors to use in the matrix factorization.
+
+        dtype : string in {'float32', 'float64'}
+            The floating point precision to use for all matrix operations.
+
+        lambda_factors : float
+            The regularization hyperparameter applied to the factors (i.e. to the
+            matrices `U` and `V` of the factorization.
+
+        lambda_biases : float
+            The regularization hyperparameter applied to the user-bases and item-
+            biases.
+
+        init_factor_mean : float
+            The mean of the Gaussian distribution used to randomize the `U` and
+            `V` matrices.
+
+        init_factor_stddev : float
+            The std. deviation of the Gaussian distribution used to randomize the `U` and
+            `V` matrices.
+
+        n_iter : int
+            The number of iterations (aka, 'epochs') of gradient descent to run.
+
+        learning_rate : float
+            The learning rate (aka, `alpha` or `step size`) used by gradient descent.
+
+        batch_size : int
+            The batch size to use for gradient descent. If -1, the full-batch gradient
+            descent is used. Otherwise if >0, Stochastic Gradient Descent will be used.
+        """
         self.k = k
         self.dtype = dtype
         self.lambda_factors = lambda_factors
@@ -67,24 +102,34 @@ class Recommender(BaseEstimator):
             The ratings (`N` samples) corresponding to the user-item data
             held in `X`.
 
-        lambda_factors : float-like, optional (default=None)
+        lambda_factors : float, optional (default=None)
             If not None, then override the `lambda_factors` given to `__init__()`.
 
-        lambda_biases : float-like, optional (default=None)
+        lambda_biases : float, optional (default=None)
             If not None, then override the `lambda_biases` given to `__init__()`.
 
         n_iter : int, optional (default=None)
             If not None, then override the `n_iter` given to `__init__()`.
 
-        learning_rate : float-like, optional (default=None)
+        learning_rate : float, optional (default=None)
             If not None, then override the `learning_rate` given to `__init__()`.
 
         batch_size : int, optional (default=None)
             If not None, then override the `batch_size` given to `__init__()`.
 
         tune : bool, optional (default=False)
-            If `fit()` was previously called, then pick up where it left off by training
-            for more iterations with the given `X` and `y`.
+            If True and if `fit()` was previously called, then pick up where the
+            the last `fit()` left off by training for more iterations with the
+            given `X` and `y`. Note: You can pass _new_ `X` and `y` (and pass
+            `tune=True`) in order train the model on _additional_ ratings without
+            forgetting what was learned by previous calls to `fit()`. If the _new_
+            `X` has `user_id`s and/or `item_id`s which were previously unseen,
+            then the `U` and `V` matrices will be extended to accommodate these
+            new users/items. Of course, probably a more common use-case will be
+            to call `fit()` again using the same `X` and `y` as was used previously,
+            allowing you to simply run more (S)GD iterations.
+            (Final note: self.mu_ is not recalculated when the model is tuned in this
+            way.)
 
         verbose : bool, optional (default=False)
             If True, log verbose output.
@@ -95,7 +140,8 @@ class Recommender(BaseEstimator):
             If the special string 'unique' is given, then create a unique
             logger object for this recommender; such an operation is useful
             if you are doing a parallel gridsearch so that each recommender
-            will build their own independent log output.
+            will build its own independent log output, making it easier for
+            you to dig into the results of each cell of the gridsearch.
 
         Returns
         -------
@@ -117,10 +163,15 @@ class Recommender(BaseEstimator):
         # Do the tuning logic:
         tune = kwargs.get('tune', False)
         if tune and getattr(self, 'U_concat_bias_var', None) is not None and getattr(self, 'V_concat_bias_var', None) is not None:
+            # We'll tune the matrices we already have. As such, we will not include the "unknown records"
+            # because they have already been included in the first call the `fit()`. Also, we'll make
+            # note of the current `U` and `V` matrices so we can extend them if needed.
             include_unknown_records = False
             old_U_concat_bias_var = self.U_concat_bias_var
             old_V_concat_bias_var = self.V_concat_bias_var
         else:
+            # In this case, we should start everything fresh, treating the current data as the
+            # only data ever seen.
             include_unknown_records = True
             old_U_concat_bias_var = None
             old_V_concat_bias_var = None
@@ -179,6 +230,15 @@ class Recommender(BaseEstimator):
 
     def predict(self, X):
         """Predict the ratings of new user-item pairs.
+
+        If users exist in `X` which were not seen by `fit()`, then each of
+        these new user's predicted rating will be exactly the bias of the
+        corresponding item. As such, the behaviour will roughly be an item-
+        popularity recommender.
+
+        If items exist in `X` which were not seen by `fit()`, then each of
+        these new item's predicted ratings will be exactly the bias of the
+        corresponding user.
 
         Parameters
         ----------
@@ -252,7 +312,7 @@ class Recommender(BaseEstimator):
 
     @staticmethod
     def _convert_to_indices(values, value_to_index_map, index_to_value_map, allow_new_entries=False):
-        """Static helper method to convert opaque user- and item- values
+        """Private static helper method to convert opaque user- and item- values
         into 0-based-indices.
         """
         indices = []
@@ -280,6 +340,7 @@ class Recommender(BaseEstimator):
                                  new_num_users, new_num_items,
                                  include_unknown_records,
                                  old_U_concat_bias_var, old_V_concat_bias_var):
+        """Private helper method to build the TensorFlow computation graph."""
 
         # Create the user, item, and rating tf placeholders.
         self.user_indices_placeholder = tf.placeholder(dtype=tf.int32, name="user_indices")
@@ -436,16 +497,13 @@ class Recommender(BaseEstimator):
             self.init_factor_stddev_placeholder: self.init_factor_stddev
         }
 
-        # The global variable initalization operation + a new TensorFlow Session!
         init_op = tf.variables_initializer(self.needs_init)
         self.sess.run(init_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, user_indices, item_indices, rating_array,
                               lambda_factors, lambda_biases, learning_rate,
                               num_steps, batch_size, verbose, log):
-        """
-        Trains for (S)GD iterations, and returns the RMSE of the entire training set.
-        """
+        """Private helper that trains (S)GD iterations."""
 
         # Here's what to feed the session if you want to deal with the whole training set.
         full_train_batch_feed = {
@@ -455,17 +513,20 @@ class Recommender(BaseEstimator):
             self.mu_placeholder: self.mu_
         }
 
+        # Verbosity is helpful...
         if verbose:
             log.info("Starting {}Gradient Descent for {} iterations".format('Stochastic ' if batch_size>0 else '', num_steps))
             begin_rmse = self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
             log.info("training set RMSE = {}".format(begin_rmse))
 
+        # These are the hyperparameters needed for training.
         hyperparam_dict = {
             self.alpha_placeholder: learning_rate,
             self.lambda_factors_placeholder: lambda_factors,
             self.lambda_biases_placeholder: lambda_biases
         }
 
+        # Train for a while...
         for _ in range(num_steps):
             if batch_size <= 0:
                 feed_dict = dict(full_train_batch_feed)
@@ -487,18 +548,22 @@ class Recommender(BaseEstimator):
                 curr_rmse = self.rmse_op.eval(session=self.sess, feed_dict=feed_dict)
                 log.info("{}training set RMSE = {}".format(prefix, curr_rmse))
 
+        # Yay more verbosity.
         if verbose:
             log.info("Ending {}Gradient Descent".format('Stochastic ' if batch_size>0 else ''))
             end_rmse = self.rmse_op.eval(session=self.sess, feed_dict=full_train_batch_feed)
             log.info("training set RMSE = {}".format(end_rmse))
 
     def _predict(self, user_indices, item_indices):
+        """Private helper to make predictions."""
 
         feed_dict = {
             self.user_indices_placeholder: user_indices,
             self.item_indices_placeholder: item_indices,
             self.mu_placeholder: self.mu_
         }
+
+        # The `.eval` on a tf operation returns an ndarray.
         return self.reconstruction_gather_ratings_op.eval(session=self.sess, feed_dict=feed_dict)
 
 
