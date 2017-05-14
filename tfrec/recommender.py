@@ -286,13 +286,6 @@ class Recommender(BaseEstimator):
         user-factors row. The existing users' factors are not modified, and
         the item-factors are not modified.
 
-        Note: This method will not work if you've used `fit()` to tune the model
-        on new data. (The reason being that the TensorFlow graph gets weird in this
-        case, and our scheme for quickly training a new user does not work when
-        the graph gets weird.) As a solution, if you plan to use this method, do
-        not use `fit()` to tune the model on _new_ data! (You can however use `fit()`
-        to tune the model on the same data as used previously.)
-
         Parameters
         ----------
         item_rating_pairs : array-like of 2-tuples
@@ -313,7 +306,6 @@ class Recommender(BaseEstimator):
         rating_array = np.array([rating for _, rating in item_rating_pairs if item in self.item_to_index_map_])
 
         # TODO
-
 
     def _prep_data_for_train(self, user_array, item_array):
         """Private helper method to prep the training set."""
@@ -480,6 +472,9 @@ class Recommender(BaseEstimator):
                                               self.item_biases_var],
                                              1,
                                              name='item_biases_2')
+        else:
+            self.orig_user_biases_var = self.user_biases_var
+            self.orig_item_biases_var = self.item_biases_var
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
         self.U_concat_bias_var = tf.concat([self.U_var,
@@ -551,7 +546,7 @@ class Recommender(BaseEstimator):
         self.train_step_op          = self.optimizer.minimize(self.cost_op)
         self.train_step_new_user_op = self.optimizer.minimize(self.cost_op,
                                                               var_list=[self.U_new_entry,
-                                                                        self.user_biases_var])
+                                                                        self.orig_user_biases_var])
 
     def _init_variables(self):
         """Private helper to init the TensorFlow globals."""
