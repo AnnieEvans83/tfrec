@@ -168,7 +168,7 @@ class Recommender(BaseEstimator):
         verbose, log = Recommender._get_verbosity(kwargs)
 
         # Do the tuning logic:
-        tune = self._handle_tuning_logic(kwargs.get('tune', False), verbose, log)
+        tune = self._handle_tuning_logic(kwargs.get('tune', False), rating_array, verbose, log)
 
         # Prepare the data by creating 0-based indices for the users and items,
         # and by counting number of unique users and items.
@@ -304,8 +304,8 @@ class Recommender(BaseEstimator):
                                    kwargs.get('learning_rate', self.learning_rate),
                                    kwargs.get('n_iter', 20),
                                    batch_size=-1,
-                                   verbose,
-                                   log)
+                                   verbose=verbose,
+                                   log=log)
 
         item_indices = np.arange(self.num_items)
         user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
@@ -349,7 +349,7 @@ class Recommender(BaseEstimator):
 
         return user_indices, item_indices
 
-    def _handle_tuning_logic(self, tune, verbose, log):
+    def _handle_tuning_logic(self, tune, rating_array, verbose, log):
         """Private helper to reset `self` when not tuning, and to detect when tuning is
         possible and okay to attemt.
         """
@@ -500,9 +500,9 @@ class Recommender(BaseEstimator):
         if tune:
             old_user_biases_var = self.user_biases_var
             old_item_biases_var = self.item_biases_var
-        self.user_biases_var = tf.Variable(tf.zeros([new_num_users, 1], dtype=dtype),
+        self.user_biases_var = tf.Variable(tf.zeros([num_U_rows, 1], dtype=dtype),
                                            name="user_biases")
-        self.item_biases_var = tf.Variable(tf.zeros([1, new_num_items], dtype=dtype),
+        self.item_biases_var = tf.Variable(tf.zeros([1, num_V_cols], dtype=dtype),
                                            name="item_biases")
         self.needs_init.add(self.user_biases_var)
         self.needs_init.add(self.item_biases_var)
@@ -516,8 +516,22 @@ class Recommender(BaseEstimator):
                                              1,
                                              name='item_biases_2')
         else:
-            self.orig_user_biases_var = self.user_biases_var
-            self.orig_item_biases_var = self.item_biases_var
+            self.new_user_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
+                                             name='new_user_bias')
+            self.new_item_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
+                                             name='new_item_bias')
+            self.needs_init.add(self.new_user_bias)
+            self.needs_init.add(self.new_item_bias)
+            self.user_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
+                                              self.new_user_bias,
+                                              self.user_biases_var],
+                                             0,
+                                             name='user_biases_2')
+            self.item_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
+                                              self.new_item_bias,
+                                              self.item_biases_var],
+                                             1,
+                                             name='item_biases_2')
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
         self.U_concat_bias_var = tf.concat([self.U_var,
@@ -589,7 +603,7 @@ class Recommender(BaseEstimator):
         self.train_step_op          = self.optimizer.minimize(self.cost_op)
         self.train_step_new_user_op = self.optimizer.minimize(self.cost_op,
                                                               var_list=[self.U_new_entry,
-                                                                        self.orig_user_biases_var])
+                                                                        self.new_user_bias])
 
     def _init_variables(self):
         """Private helper to init the TensorFlow globals."""
