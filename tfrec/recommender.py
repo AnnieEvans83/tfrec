@@ -200,7 +200,8 @@ class Recommender(BaseEstimator):
 
         # Tell TensorFlow to run gradient descent for us! (...doing several epochs,
         # and optionally doing SGD rather than full-batch)
-        self._run_gradient_descent(user_indices, item_indices, rating_array,
+        self._run_gradient_descent(self.train_step_op,
+                                   user_indices, item_indices, rating_array,
                                    kwargs.get('lambda_factors', self.lambda_factors),
                                    kwargs.get('lambda_biases', self.lambda_biases),
                                    kwargs.get('learning_rate', self.learning_rate),
@@ -236,7 +237,7 @@ class Recommender(BaseEstimator):
 
         # Have sklearn check the that fit has been called previously, and
         # have sklearn check and convert the inputs.
-        check_is_fitted(self, ['train_step_op'])
+        check_is_fitted(self, ['optimizer'])
         X = check_array(X, dtype=None, estimator=self)
 
         # In our specific case (a recommender engine), there should be exactly two features.
@@ -288,17 +289,19 @@ class Recommender(BaseEstimator):
         an ndarray of size (num_items,) representing the predicted ratings
         for the one user on every item in the training dataset.
         """
-        check_is_fitted(self, ['train_step_new_user_op'])
+        check_is_fitted(self, ['optimizer'])
 
         item_indices = np.array([self.item_to_index_map_[item] for item, _ in item_rating_pairs if item in self.item_to_index_map_])
         user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
-        rating_array = np.array([rating for _, rating in item_rating_pairs if item in self.item_to_index_map_])
+        rating_array = np.array([rating for item, rating in item_rating_pairs if item in self.item_to_index_map_])
 
         verbose, log = Recommender._get_verbosity(kwargs)
 
-        # init variables here
+        init_op = tf.variables_initializer({self.U_new_entry, self.new_user_bias})
+        self.sess.run(init_op, feed_dict={})
 
-        self._run_gradient_descent(user_indices, item_indices, rating_array,
+        self._run_gradient_descent(self.train_step_new_user_op,
+                                   user_indices, item_indices, rating_array,
                                    self.lambda_factors,
                                    self.lambda_biases,
                                    kwargs.get('learning_rate', self.learning_rate),
@@ -353,7 +356,7 @@ class Recommender(BaseEstimator):
         """Private helper to reset `self` when not tuning, and to detect when tuning is
         possible and okay to attemt.
         """
-        if tune and getattr(self, 'train_step_op', None) is not None:
+        if tune and getattr(self, 'optimizer', None) is not None:
             # We'll tune the matrices we already have. As such, we will not include the "unknown records"
             # because they have already been included in the first call the `fit()`. Also, we'll make
             # note of the current `U` and `V` matrices so we can extend them if needed.
@@ -616,7 +619,8 @@ class Recommender(BaseEstimator):
         init_op = tf.variables_initializer(self.needs_init)
         self.sess.run(init_op, feed_dict=init_params_dict)
 
-    def _run_gradient_descent(self, user_indices, item_indices, rating_array,
+    def _run_gradient_descent(self, tf_step_op,
+                              user_indices, item_indices, rating_array,
                               lambda_factors, lambda_biases, learning_rate,
                               num_steps, batch_size, verbose, log):
         """Private helper that trains (S)GD iterations."""
@@ -657,7 +661,7 @@ class Recommender(BaseEstimator):
                 }
                 prefix = "approx. "
             feed_dict.update(hyperparam_dict)
-            self.train_step_op.run(session=self.sess, feed_dict=feed_dict)
+            tf_step_op.run(session=self.sess, feed_dict=feed_dict)
             self.completed_iters += 1
             if verbose:
                 log.info("Finished iteration #{}".format(self.completed_iters))
