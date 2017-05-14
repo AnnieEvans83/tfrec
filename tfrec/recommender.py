@@ -9,6 +9,10 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 LOCAL_LOG = logger.easy_setup(__name__, console_output=True)
 
 
+if int(tf.__version__.split('.')[0]) < 1:
+    raise Exception("Requires TensorFlow version 1.0.0 or higher")
+
+
 class Recommender(BaseEstimator):
     """A fast recommender engine built on TensorFlow; created at Galvanize.
 
@@ -161,37 +165,10 @@ class Recommender(BaseEstimator):
         rating_array = y
 
         # Handle the optional verbosity parameters:
-        verbose = kwargs.get('verbose', False)
-        log = kwargs.get('log', None)
-        if log == 'unique':
-            uuid = gen_uuid().hex[:12]
-            log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
-        if log is None:
-            log = LOCAL_LOG
+        verbose, log = Recommender._get_verbosity(kwargs)
 
         # Do the tuning logic:
-        tune = kwargs.get('tune', False)
-        if tune and getattr(self, 'train_step_op', None) is not None:
-            # We'll tune the matrices we already have. As such, we will not include the "unknown records"
-            # because they have already been included in the first call the `fit()`. Also, we'll make
-            # note of the current `U` and `V` matrices so we can extend them if needed.
-            tune = True
-            if verbose:
-                log.info("will tune previous `fit()`")
-        else:
-            # In this case, we should start everything fresh, treating the current data as the
-            # only data ever seen.
-            tune = False
-            self.user_to_index_map_ = None
-            self.index_to_user_map_ = None
-            self.item_to_index_map_ = None
-            self.index_to_item_map_ = None
-            self.num_users = 0
-            self.num_items = 0
-            self.completed_iters = 0
-            self.mu_ = rating_array.mean()
-            if verbose:
-                log.info("will `fit()` fresh")
+        tune = self._handle_tuning_logic(kwargs.get('tune', False), verbose, log)
 
         # Prepare the data by creating 0-based indices for the users and items,
         # and by counting number of unique users and items.
@@ -278,7 +255,7 @@ class Recommender(BaseEstimator):
         # Make the predictions.
         return self._predict(user_indices, item_indices)
 
-    def predict_new_user(self, item_rating_pairs):
+    def predict_new_user(self, item_rating_pairs, **kwargs):
         """Predict all ratings for one new user by doing a simplified _fit_
         and _predict_ on just this one new user.
 
@@ -294,18 +271,45 @@ class Recommender(BaseEstimator):
             Entries with `item_id`s not in the training set are ignored (since
             there's no possible way to use them in this context).
 
+        n_iter : int, optional (default=20)
+            The number of gradient descent iterations to run.
+
+        learning_rate : float, optional (default=None)
+            If not None, then override the `learning_rate` given to `__init__()`.
+
+        verbose : bool, optional (default=False)
+            If True, log verbose output.
+
+        log : logging.Logger, optional (default=LOCAL_LOG)
+            See `fit()`'s description of the `log` parameter.
+
         Returns
         -------
         an ndarray of size (num_items,) representing the predicted ratings
         for the one user on every item in the training dataset.
         """
         check_is_fitted(self, ['train_step_new_user_op'])
+
         item_indices = np.array([self.item_to_index_map_[item] for item, _ in item_rating_pairs if item in self.item_to_index_map_])
-        new_entry_index = self.user_to_index_map_['__new_entry__']
-        user_indices = np.array([new_entry_index] * len(item_indices))
+        user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
         rating_array = np.array([rating for _, rating in item_rating_pairs if item in self.item_to_index_map_])
 
-        # TODO
+        verbose, log = Recommender._get_verbosity(kwargs)
+
+        # init variables here
+
+        self._run_gradient_descent(user_indices, item_indices, rating_array,
+                                   self.lambda_factors,
+                                   self.lambda_biases,
+                                   kwargs.get('learning_rate', self.learning_rate),
+                                   kwargs.get('n_iter', 20),
+                                   batch_size=-1,
+                                   verbose,
+                                   log)
+
+        item_indices = np.arange(self.num_items)
+        user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
+        return self._predict(user_indices, item_indices)
 
     def _prep_data_for_train(self, user_array, item_array):
         """Private helper method to prep the training set."""
@@ -344,6 +348,45 @@ class Recommender(BaseEstimator):
                 Recommender._convert_to_indices(item_array, self.item_to_index_map_, self.index_to_item_map_)
 
         return user_indices, item_indices
+
+    def _handle_tuning_logic(self, tune, verbose, log):
+        """Private helper to reset `self` when not tuning, and to detect when tuning is
+        possible and okay to attemt.
+        """
+        if tune and getattr(self, 'train_step_op', None) is not None:
+            # We'll tune the matrices we already have. As such, we will not include the "unknown records"
+            # because they have already been included in the first call the `fit()`. Also, we'll make
+            # note of the current `U` and `V` matrices so we can extend them if needed.
+            tune = True
+            if verbose:
+                log.info("will tune previous `fit()`")
+        else:
+            # In this case, we should start everything fresh, treating the current data as the
+            # only data ever seen.
+            tune = False
+            self.user_to_index_map_ = None
+            self.index_to_user_map_ = None
+            self.item_to_index_map_ = None
+            self.index_to_item_map_ = None
+            self.num_users = 0
+            self.num_items = 0
+            self.completed_iters = 0
+            self.mu_ = rating_array.mean()
+            if verbose:
+                log.info("will `fit()` fresh")
+        return tune
+
+    @staticmethod
+    def _get_verbosity(kwargs):
+        """Private static helper method to get the verbosity settings from **kwargs."""
+        verbose = kwargs.get('verbose', False)
+        log = kwargs.get('log', None)
+        if log == 'unique':
+            uuid = gen_uuid().hex[:12]
+            log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
+        if log is None:
+            log = LOCAL_LOG
+        return verbose, log
 
     @staticmethod
     def _convert_to_indices(values, value_to_index_map, index_to_value_map, allow_new_entries=False):
