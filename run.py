@@ -21,11 +21,11 @@ model = Recommender()
 
 for _ in range(5):
 
-    model.fit(X, y, verbose=True, tune=True, n_iter=100)
+    model.fit(X, y, verbose=True, tune=True, n_iter=10)
     y_pred = model.predict(X)
 
     manual_rmse = np.sqrt(np.mean((y_pred - y) ** 2))
-    log.info('Manual Training RMSE: {}'.format(manual_rmse))
+    log.info('Training RMSE: {}'.format(manual_rmse))
 
     predictions = test_set.copy()
     predictions['rating'] = model.predict(test_set[['user_id', 'joke_id']].values)

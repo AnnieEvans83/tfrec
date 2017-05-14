@@ -171,21 +171,17 @@ class Recommender(BaseEstimator):
 
         # Do the tuning logic:
         tune = kwargs.get('tune', False)
-        if tune and getattr(self, 'U_concat_bias_var', None) is not None and getattr(self, 'V_concat_bias_var', None) is not None:
+        if tune and getattr(self, 'train_step_op', None) is not None:
             # We'll tune the matrices we already have. As such, we will not include the "unknown records"
             # because they have already been included in the first call the `fit()`. Also, we'll make
             # note of the current `U` and `V` matrices so we can extend them if needed.
-            include_unknown_records = False
-            old_U_concat_bias_var = self.U_concat_bias_var
-            old_V_concat_bias_var = self.V_concat_bias_var
+            tune = True
             if verbose:
                 log.info("will tune previous `fit()`")
         else:
             # In this case, we should start everything fresh, treating the current data as the
             # only data ever seen.
-            include_unknown_records = True
-            old_U_concat_bias_var = None
-            old_V_concat_bias_var = None
+            tune = False
             self.user_to_index_map_ = None
             self.index_to_user_map_ = None
             self.item_to_index_map_ = None
@@ -217,8 +213,7 @@ class Recommender(BaseEstimator):
         if new_num_users > 0 or new_num_items > 0:
             self._build_computation_graph(dtype, verbose, log,
                                           new_num_users, new_num_items,
-                                          include_unknown_records,
-                                          old_U_concat_bias_var, old_V_concat_bias_var)
+                                          tune)
 
         # Start the TensorFlow session and initialize the variables.
         if self.sess is None:
@@ -349,8 +344,7 @@ class Recommender(BaseEstimator):
 
     def _build_computation_graph(self, dtype, verbose, log,
                                  new_num_users, new_num_items,
-                                 include_unknown_records,
-                                 old_U_concat_bias_var, old_V_concat_bias_var):
+                                 tune):
         """Private helper method to build the TensorFlow computation graph."""
 
         # Create the user, item, and rating tf placeholders.
@@ -382,12 +376,15 @@ class Recommender(BaseEstimator):
                                                              name="init_factor_stddev")
 
         # U will represent user-factors, and V will represent item-factors.
-        if include_unknown_records:
-            num_U_rows = new_num_users-1
-            num_V_cols = new_num_items-1
-        else:
+        if tune:
             num_U_rows = new_num_users
             num_V_cols = new_num_items
+        else:
+            num_U_rows = new_num_users-1
+            num_V_cols = new_num_items-1
+        if tune:
+            old_U_var = self.U_var
+            old_V_var = self.V_var
         self.U_var = tf.Variable(tf.truncated_normal([num_U_rows, self.k],
                                                      mean=self.init_factor_mean_placeholder,
                                                      stddev=self.init_factor_stddev_placeholder,
@@ -400,7 +397,16 @@ class Recommender(BaseEstimator):
                                  name="item_factors_1")
         self.needs_init.add(self.U_var)
         self.needs_init.add(self.V_var)
-        if include_unknown_records:
+        if tune:
+            self.U_var = tf.concat([old_U_var,
+                                    self.U_var],
+                                   0,
+                                   name="user_factors_2")
+            self.V_var = tf.concat([old_V_var,
+                                    self.V_var],
+                                   1,
+                                   name="item_factors_2")
+        else:
             self.U_var = tf.concat([tf.zeros([1, self.k]),
                                     self.U_var],
                                    0,
@@ -411,37 +417,36 @@ class Recommender(BaseEstimator):
                                    name="item_factors_2")
 
         # Build the user- and item-bias vectors.
+        if tune:
+            old_user_biases_var = self.user_biases_var
+            old_item_biases_var = self.item_biases_var
         self.user_biases_var = tf.Variable(tf.zeros([new_num_users, 1], dtype=dtype),
                                            name="user_biases")
         self.item_biases_var = tf.Variable(tf.zeros([1, new_num_items], dtype=dtype),
                                            name="item_biases")
         self.needs_init.add(self.user_biases_var)
         self.needs_init.add(self.item_biases_var)
+        if tune:
+            self.user_biases_var = tf.concat([old_user_biases_var,
+                                              self.user_biases_var],
+                                             0,
+                                             name='user_biases_2')
+            self.item_biases_var = tf.concat([old_item_biases_var,
+                                              self.item_biases_var],
+                                             1,
+                                             name='item_biases_2')
 
         # For conveniance, let's concat the biases onto the end of the factor vectors.
         self.U_concat_bias_var = tf.concat([self.U_var,
                                             self.user_biases_var,
-                                            tf.ones([new_num_users, 1], dtype=dtype)],
+                                            tf.ones([tf.shape(self.U_var)[0], 1], dtype=dtype)],
                                            1,
                                            name="user_factors_concat_user_biases")
         self.V_concat_bias_var = tf.concat([self.V_var,
-                                            tf.ones([1, new_num_items], dtype=dtype),
+                                            tf.ones([1, tf.shape(self.V_var)[1]], dtype=dtype),
                                             self.item_biases_var],
                                            0,
                                            name="item_factors_concat_item_biases")
-
-        # If we are doing extended training (i.e. we are picking up where the last
-        # training left off), then we will extend the user-factors and item-factors.
-        if old_U_concat_bias_var is not None:
-            self.U_concat_bias_var = tf.concat([old_U_concat_bias_var,
-                                                self.U_concat_bias_var],
-                                               0,
-                                               name="user_factors_concat_user_biases")
-        if old_V_concat_bias_var is not None:
-            self.V_concat_bias_var = tf.concat([old_V_concat_bias_var,
-                                                self.V_concat_bias_var],
-                                               1,
-                                               name="item_factors_concat_item_biases")
 
         # The model:
         self.centered_reconstruction_op = tf.matmul(self.U_concat_bias_var, self.V_concat_bias_var,
