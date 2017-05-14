@@ -278,6 +278,43 @@ class Recommender(BaseEstimator):
         # Make the predictions.
         return self._predict(user_indices, item_indices)
 
+    def predict_new_user(self, item_rating_pairs):
+        """Predict all ratings for one new user by doing a simplified _fit_
+        and _predict_ on just this one new user.
+
+        This entails doing a little bit of gradient descent on just one new
+        user-factors row. The existing users' factors are not modified, and
+        the item-factors are not modified.
+
+        Note: This method will not work if you've used `fit()` to tune the model
+        on new data. (The reason being that the TensorFlow graph gets weird in this
+        case, and our scheme for quickly training a new user does not work when
+        the graph gets weird.) As a solution, if you plan to use this method, do
+        not use `fit()` to tune the model on _new_ data! (You can however use `fit()`
+        to tune the model on the same data as used previously.)
+
+        Parameters
+        ----------
+        item_rating_pairs : array-like of 2-tuples
+            Each 2-tuple should contain (`item_id`, `rating`), denoting the
+            items and ratings the new user has provided as a seed to the system.
+            Entries with `item_id`s not in the training set are ignored (since
+            there's no possible way to use them in this context).
+
+        Returns
+        -------
+        an ndarray of size (num_items,) representing the predicted ratings
+        for the one user on every item in the training dataset.
+        """
+        check_is_fitted(self, ['train_step_new_user_op'])
+        item_indices = np.array([self.item_to_index_map_[item] for item, _ in item_rating_pairs if item in self.item_to_index_map_])
+        new_entry_index = self.user_to_index_map_['__new_entry__']
+        user_indices = np.array([new_entry_index] * len(item_indices))
+        rating_array = np.array([rating for _, rating in item_rating_pairs if item in self.item_to_index_map_])
+
+        # TODO
+
+
     def _prep_data_for_train(self, user_array, item_array):
         """Private helper method to prep the training set."""
 
@@ -323,9 +360,9 @@ class Recommender(BaseEstimator):
         """
         indices = []
         if value_to_index_map is None:
-            value_to_index_map = {'__unknown__': 0}
+            value_to_index_map = {'__unknown__': 0, '__new_entry__': 1}
         if index_to_value_map is None:
-            index_to_value_map = {0: '__unknown__'}
+            index_to_value_map = {0: '__unknown__', 1: '__new_entry__'}
         if allow_new_entries:
             for value in values:
                 if value not in value_to_index_map:
@@ -380,8 +417,8 @@ class Recommender(BaseEstimator):
             num_U_rows = new_num_users
             num_V_cols = new_num_items
         else:
-            num_U_rows = new_num_users-1
-            num_V_cols = new_num_items-1
+            num_U_rows = new_num_users-2
+            num_V_cols = new_num_items-2
         if tune:
             old_U_var = self.U_var
             old_V_var = self.V_var
@@ -407,11 +444,19 @@ class Recommender(BaseEstimator):
                                    1,
                                    name="item_factors_2")
         else:
+            self.U_new_entry = tf.Variable(tf.zeros([1, self.k], dtype=dtype),
+                                           name='U_new_entry')
+            self.V_new_entry = tf.Variable(tf.zeros([self.k, 1], dtype=dtype),
+                                           name='V_new_entry')
+            self.needs_init.add(self.U_new_entry)
+            self.needs_init.add(self.V_new_entry)
             self.U_var = tf.concat([tf.zeros([1, self.k]),
+                                    self.U_new_entry,
                                     self.U_var],
                                    0,
                                    name="user_factors_2")
             self.V_var = tf.concat([tf.zeros([self.k, 1]),
+                                    self.V_new_entry,
                                     self.V_var],
                                    1,
                                    name="item_factors_2")
@@ -503,7 +548,10 @@ class Recommender(BaseEstimator):
 
         # TensorFlow's magic graident descent optimization:
         self.optimizer = tf.train.GradientDescentOptimizer(self.alpha_placeholder)
-        self.train_step_op = self.optimizer.minimize(self.cost_op)
+        self.train_step_op          = self.optimizer.minimize(self.cost_op)
+        self.train_step_new_user_op = self.optimizer.minimize(self.cost_op,
+                                                              var_list=[self.U_new_entry,
+                                                                        self.user_biases_var])
 
     def _init_variables(self):
         """Private helper to init the TensorFlow globals."""
