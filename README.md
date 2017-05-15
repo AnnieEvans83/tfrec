@@ -1,6 +1,16 @@
+# tfrec
 
+A fast recommender engine built on TensorFlow; created at Galvanize.
 
-References:
+This engine publishes a sklearn-style interfaces.
+
+### ... A work in progress ...
+
+This library is in its infancy, meaning this is a great opportunity for you to get involved! Check out the [issues](https://github.com/GalvanizeOpenSource/tfrec/issues), or send us a PR, or contact [Ryan Henning](https://github.com/acu192) for info about how to get involved.
+
+What is coming next is a better readme page + documentation on [Read the Docs](https://readthedocs.com/). You can _watch_ this repo to see when updates are made.
+
+### References:
 
 - https://www.youtube.com/watch?v=eBbEDRsCmv4
 - https://gohugo.io/overview/quickstart/
