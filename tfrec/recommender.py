@@ -138,6 +138,9 @@ class Recommender(BaseEstimator):
         verbose : bool, optional (default=False)
             If True, log verbose output.
 
+        verbose_period : int, optional (default=1)
+            The iteration period of one log record. Higher means log less often.
+
         log : logging.Logger, optional (default=LOCAL_LOG)
             If given, use this `log` when printing verbose output; otherwise
             use the `LOCAL_LOG`.
@@ -165,7 +168,7 @@ class Recommender(BaseEstimator):
         rating_array = y
 
         # Handle the optional verbosity parameters:
-        verbose, log = Recommender._get_verbosity(kwargs)
+        verbose, verbose_period, log = Recommender._get_verbosity(kwargs)
 
         # Do the tuning logic:
         tune = self._handle_tuning_logic(kwargs.get('tune', False), rating_array, verbose, log)
@@ -202,6 +205,7 @@ class Recommender(BaseEstimator):
                                    kwargs.get('n_iter', self.n_iter),
                                    kwargs.get('batch_size', self.batch_size),
                                    verbose,
+                                   verbose_period,
                                    log)
 
         return self
@@ -289,7 +293,7 @@ class Recommender(BaseEstimator):
         user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
         rating_array = np.array([rating for item, rating in item_rating_pairs if item in self.item_to_index_map_])
 
-        verbose, log = Recommender._get_verbosity(kwargs)
+        verbose, verbose_period, log = Recommender._get_verbosity(kwargs)
 
         self.sess.run(self.init_new_user_op, feed_dict={})
 
@@ -301,6 +305,7 @@ class Recommender(BaseEstimator):
                                    kwargs.get('n_iter', 20),
                                    batch_size=-1,
                                    verbose=verbose,
+                                   verbose_period=verbose_period,
                                    log=log)
 
         item_indices = np.arange(self.num_items)
@@ -376,13 +381,14 @@ class Recommender(BaseEstimator):
     def _get_verbosity(kwargs):
         """Private static helper method to get the verbosity settings from **kwargs."""
         verbose = kwargs.get('verbose', False)
+        verbose_period = kwargs.get('verbose_period', 1)
         log = kwargs.get('log', None)
         if log == 'unique':
             uuid = gen_uuid().hex[:12]
             log = logger.easy_setup(uuid, console_output=True, filename="log_{}.txt".format(uuid))
         if log is None:
             log = LOCAL_LOG
-        return verbose, log
+        return verbose, verbose_period, log
 
     @staticmethod
     def _convert_to_indices(values, value_to_index_map, index_to_value_map, allow_new_entries=False):
@@ -622,7 +628,7 @@ class Recommender(BaseEstimator):
     def _run_gradient_descent(self, tf_step_op,
                               user_indices, item_indices, rating_array,
                               lambda_factors, lambda_biases, learning_rate,
-                              num_steps, batch_size, verbose, log):
+                              num_steps, batch_size, verbose, verbose_period, log):
         """Private helper that trains (S)GD iterations."""
 
         # Here's what to feed the session if you want to deal with the whole training set.
@@ -647,7 +653,7 @@ class Recommender(BaseEstimator):
         }
 
         # Train for a while...
-        for _ in range(num_steps):
+        for i in range(num_steps):
             if batch_size <= 0:
                 feed_dict = dict(full_train_batch_feed)
                 prefix = ""
@@ -663,7 +669,7 @@ class Recommender(BaseEstimator):
             feed_dict.update(hyperparam_dict)
             tf_step_op.run(session=self.sess, feed_dict=feed_dict)
             self.completed_iters += 1
-            if verbose:
+            if verbose and (i % verbose_period) == 0:
                 log.info("Finished iteration #{}".format(self.completed_iters))
                 curr_rmse = self.rmse_op.eval(session=self.sess, feed_dict=feed_dict)
                 log.info("{}training set RMSE = {}".format(prefix, curr_rmse))

@@ -19,7 +19,10 @@ y = training_set['rating'].values
 
 model = Recommender()
 
-for _ in range(5):
+model.fit(X[:-10000], y[:-10000], verbose=True, tune=True, n_iter=10)
+model.fit(X[-10000:], y[-10000:], verbose=True, tune=True, n_iter=10)
+
+for _ in range(3):
 
     model.fit(X, y, verbose=True, tune=True, n_iter=10)
     y_pred = model.predict(X)
@@ -30,5 +33,13 @@ for _ in range(5):
     predictions = test_set.copy()
     predictions['rating'] = model.predict(test_set[['user_id', 'joke_id']].values)
     log.info('Test Set RMSE: {}'.format(scoring.score_rmse(predictions)))
-    log.info('Test Set top-5-percent score: {}'.format(scoring.score_top_5_percent(predictions)))
+    #log.info('Test Set top-5-percent score: {}'.format(scoring.score_top_5_percent(predictions)))
 
+print(model.predict_new_user([(105, 4.5), (45, -5.2)]))
+
+# from IPython import embed
+# embed()
+
+import tensorflow as tf
+writer = tf.summary.FileWriter('tfout2')
+writer.add_graph(model.sess.graph)
