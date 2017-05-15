@@ -2,6 +2,7 @@
 
 References:
 
+- https://www.youtube.com/watch?v=eBbEDRsCmv4
 - https://gohugo.io/overview/quickstart/
 - https://turi.com/products/create/docs/generated/graphlab.recommender.factorization_recommender.FactorizationRecommender.html
 - https://turi.com/products/create/docs/generated/graphlab.recommender.ranking_factorization_recommender.RankingFactorizationRecommender.html
