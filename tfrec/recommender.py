@@ -192,12 +192,6 @@ class Recommender(BaseEstimator):
                                           new_num_users, new_num_items,
                                           tune)
 
-        # Start the TensorFlow session and initialize the variables.
-        if self.sess is None:
-            self.sess = tf.Session()
-            log.info("instantiated a new TensorFlow session")
-        self._init_variables()
-
         # Tell TensorFlow to run gradient descent for us! (...doing several epochs,
         # and optionally doing SGD rather than full-batch)
         self._run_gradient_descent(self.train_step_op,
@@ -237,7 +231,7 @@ class Recommender(BaseEstimator):
 
         # Have sklearn check the that fit has been called previously, and
         # have sklearn check and convert the inputs.
-        check_is_fitted(self, ['optimizer'])
+        check_is_fitted(self, ['sess'])
         X = check_array(X, dtype=None, estimator=self)
 
         # In our specific case (a recommender engine), there should be exactly two features.
@@ -289,7 +283,7 @@ class Recommender(BaseEstimator):
         an ndarray of size (num_items,) representing the predicted ratings
         for the one user on every item in the training dataset.
         """
-        check_is_fitted(self, ['optimizer'])
+        check_is_fitted(self, ['sess'])
 
         item_indices = np.array([self.item_to_index_map_[item] for item, _ in item_rating_pairs if item in self.item_to_index_map_])
         user_indices = np.array([self.user_to_index_map_['__new_entry__']] * len(item_indices))
@@ -297,8 +291,7 @@ class Recommender(BaseEstimator):
 
         verbose, log = Recommender._get_verbosity(kwargs)
 
-        init_op = tf.variables_initializer({self.U_new_entry, self.new_user_bias})
-        self.sess.run(init_op, feed_dict={})
+        self.sess.run(self.init_new_user_op, feed_dict={})
 
         self._run_gradient_descent(self.train_step_new_user_op,
                                    user_indices, item_indices, rating_array,
@@ -356,7 +349,7 @@ class Recommender(BaseEstimator):
         """Private helper to reset `self` when not tuning, and to detect when tuning is
         possible and okay to attemt.
         """
-        if tune and getattr(self, 'optimizer', None) is not None:
+        if tune and getattr(self, 'sess', None) is not None:
             # We'll tune the matrices we already have. As such, we will not include the "unknown records"
             # because they have already been included in the first call the `fit()`. Also, we'll make
             # note of the current `U` and `V` matrices so we can extend them if needed.
@@ -422,33 +415,34 @@ class Recommender(BaseEstimator):
                                  tune):
         """Private helper method to build the TensorFlow computation graph."""
 
-        # Create the user, item, and rating tf placeholders.
-        self.user_indices_placeholder = tf.placeholder(dtype=tf.int32, name="user_indices")
-        self.item_indices_placeholder = tf.placeholder(dtype=tf.int32, name="item_indices")
-        self.rating_array_placeholder = tf.placeholder(dtype=dtype, name="rating_array")
+        with tf.name_scope("input_placeholders"):
+            # Create the user, item, and rating tf placeholders.
+            self.user_indices_placeholder = tf.placeholder(dtype=tf.int32, name="user_indices")
+            self.item_indices_placeholder = tf.placeholder(dtype=tf.int32, name="item_indices")
+            self.rating_array_placeholder = tf.placeholder(dtype=dtype, name="rating_array")
 
-        # This tf placeholder will hold the learning rate, alpha.
-        self.alpha_placeholder = tf.placeholder(dtype=dtype, name="alpha")
+            # This tf placeholder will hold the learning rate, alpha.
+            self.alpha_placeholder = tf.placeholder(dtype=dtype, name="alpha")
 
-        # Create the regularization (lambda) tf placeholders.
-        # These are placeholders _not_ because you'll want to change them
-        # while training (probably...), but intead they're placeholders so
-        # that we don't have to re-create this whole tf computation graph
-        # when doing a grid-search.
-        self.lambda_factors_placeholder = tf.placeholder(dtype=dtype, name="lambda_factors")
-        self.lambda_biases_placeholder  = tf.placeholder(dtype=dtype, name="lambda_biases")
+            # Create the regularization (lambda) tf placeholders.
+            # These are placeholders _not_ because you'll want to change them
+            # while training (probably...), but intead they're placeholders so
+            # that we don't have to re-create this whole tf computation graph
+            # when doing a grid-search.
+            self.lambda_factors_placeholder = tf.placeholder(dtype=dtype, name="lambda_factors")
+            self.lambda_biases_placeholder  = tf.placeholder(dtype=dtype, name="lambda_biases")
 
-        # Placeholder for mu, the average rating in the dataset. This is fixed and is not learned.
-        # This is a placeholder _not_ because you'll want to change it
-        # while training (probably...), but intead it is a placeholder so
-        # that we can create the tf computation graph prior to knowing this value.
-        self.mu_placeholder = tf.placeholder(dtype=dtype, name="mu")
+            # Placeholder for mu, the average rating in the dataset. This is fixed and is not learned.
+            # This is a placeholder _not_ because you'll want to change it
+            # while training (probably...), but intead it is a placeholder so
+            # that we can create the tf computation graph prior to knowing this value.
+            self.mu_placeholder = tf.placeholder(dtype=dtype, name="mu")
 
-        # The random normal parameters to initialize the user- and item-factors (as placeholders).
-        self.init_factor_mean_placeholder = tf.placeholder(dtype=dtype, shape=(),
-                                                           name="init_factor_mean")
-        self.init_factor_stddev_placeholder = tf.placeholder(dtype=dtype, shape=(),
-                                                             name="init_factor_stddev")
+            # The random normal parameters to initialize the user- and item-factors (as placeholders).
+            self.init_factor_mean_placeholder = tf.placeholder(dtype=dtype, shape=(),
+                                                               name="init_factor_mean")
+            self.init_factor_stddev_placeholder = tf.placeholder(dtype=dtype, shape=(),
+                                                                 name="init_factor_stddev")
 
         # U will represent user-factors, and V will represent item-factors.
         if tune:
@@ -460,164 +454,170 @@ class Recommender(BaseEstimator):
         if tune:
             old_U_var = self.U_var
             old_V_var = self.V_var
-        self.U_var = tf.Variable(tf.truncated_normal([num_U_rows, self.k],
-                                                     mean=self.init_factor_mean_placeholder,
-                                                     stddev=self.init_factor_stddev_placeholder,
-                                                     dtype=dtype),
-                                 name="user_factors_1")
-        self.V_var = tf.Variable(tf.truncated_normal([self.k, num_V_cols],
-                                                      mean=self.init_factor_mean_placeholder,
-                                                      stddev=self.init_factor_stddev_placeholder,
-                                                      dtype=dtype),
-                                 name="item_factors_1")
-        self.needs_init.add(self.U_var)
-        self.needs_init.add(self.V_var)
-        if tune:
-            self.U_var = tf.concat([old_U_var,
-                                    self.U_var],
-                                   0,
-                                   name="user_factors_2")
-            self.V_var = tf.concat([old_V_var,
-                                    self.V_var],
-                                   1,
-                                   name="item_factors_2")
-        else:
-            self.U_new_entry = tf.Variable(tf.zeros([1, self.k], dtype=dtype),
-                                           name='U_new_entry')
-            self.V_new_entry = tf.Variable(tf.zeros([self.k, 1], dtype=dtype),
-                                           name='V_new_entry')
-            self.needs_init.add(self.U_new_entry)
-            self.needs_init.add(self.V_new_entry)
-            self.U_var = tf.concat([tf.zeros([1, self.k]),
-                                    self.U_new_entry,
-                                    self.U_var],
-                                   0,
-                                   name="user_factors_2")
-            self.V_var = tf.concat([tf.zeros([self.k, 1]),
-                                    self.V_new_entry,
-                                    self.V_var],
-                                   1,
-                                   name="item_factors_2")
+        with tf.name_scope("user_factors"):
+            self.U_var = tf.Variable(tf.truncated_normal([num_U_rows, self.k],
+                                                         mean=self.init_factor_mean_placeholder,
+                                                         stddev=self.init_factor_stddev_placeholder,
+                                                         dtype=dtype),
+                                     name="U")
+            self.needs_init.add(self.U_var)
+            if tune:
+                self.U_var = tf.concat([old_U_var,
+                                        self.U_var],
+                                       0)
+            else:
+                self.U_new_entry = tf.Variable(tf.zeros([1, self.k], dtype=dtype),
+                                               name='U_new_entry')
+                self.needs_init.add(self.U_new_entry)
+                self.U_var = tf.concat([tf.zeros([1, self.k]),
+                                        self.U_new_entry,
+                                        self.U_var],
+                                       0)
+        with tf.name_scope("item_factors"):
+            self.V_var = tf.Variable(tf.truncated_normal([self.k, num_V_cols],
+                                                          mean=self.init_factor_mean_placeholder,
+                                                          stddev=self.init_factor_stddev_placeholder,
+                                                          dtype=dtype),
+                                     name="V")
+            self.needs_init.add(self.V_var)
+            if tune:
+                self.V_var = tf.concat([old_V_var,
+                                        self.V_var],
+                                       1)
+            else:
+                self.V_new_entry = tf.Variable(tf.zeros([self.k, 1], dtype=dtype),
+                                               name='V_new_entry')
+                self.needs_init.add(self.V_new_entry)
+                self.V_var = tf.concat([tf.zeros([self.k, 1]),
+                                        self.V_new_entry,
+                                        self.V_var],
+                                       1)
 
         # Build the user- and item-bias vectors.
         if tune:
             old_user_biases_var = self.user_biases_var
             old_item_biases_var = self.item_biases_var
-        self.user_biases_var = tf.Variable(tf.zeros([num_U_rows, 1], dtype=dtype),
-                                           name="user_biases")
-        self.item_biases_var = tf.Variable(tf.zeros([1, num_V_cols], dtype=dtype),
-                                           name="item_biases")
-        self.needs_init.add(self.user_biases_var)
-        self.needs_init.add(self.item_biases_var)
-        if tune:
-            self.user_biases_var = tf.concat([old_user_biases_var,
-                                              self.user_biases_var],
-                                             0,
-                                             name='user_biases_2')
-            self.item_biases_var = tf.concat([old_item_biases_var,
-                                              self.item_biases_var],
-                                             1,
-                                             name='item_biases_2')
-        else:
-            self.new_user_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
-                                             name='new_user_bias')
-            self.new_item_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
-                                             name='new_item_bias')
-            self.needs_init.add(self.new_user_bias)
-            self.needs_init.add(self.new_item_bias)
-            self.user_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
-                                              self.new_user_bias,
-                                              self.user_biases_var],
-                                             0,
-                                             name='user_biases_2')
-            self.item_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
-                                              self.new_item_bias,
-                                              self.item_biases_var],
-                                             1,
-                                             name='item_biases_2')
+        with tf.name_scope("user_biases"):
+            self.user_biases_var = tf.Variable(tf.zeros([num_U_rows, 1], dtype=dtype),
+                                               name="user_biases")
+            self.needs_init.add(self.user_biases_var)
+            if tune:
+                self.user_biases_var = tf.concat([old_user_biases_var,
+                                                  self.user_biases_var],
+                                                 0)
+            else:
+                self.new_user_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
+                                                 name='new_user_bias')
+                self.needs_init.add(self.new_user_bias)
+                self.user_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
+                                                  self.new_user_bias,
+                                                  self.user_biases_var],
+                                                 0)
+        with tf.name_scope("item_biases"):
+            self.item_biases_var = tf.Variable(tf.zeros([1, num_V_cols], dtype=dtype),
+                                               name="item_biases")
+            self.needs_init.add(self.item_biases_var)
+            if tune:
+                self.item_biases_var = tf.concat([old_item_biases_var,
+                                                  self.item_biases_var],
+                                                 1)
+            else:
+                self.new_item_bias = tf.Variable(tf.zeros([1, 1], dtype=dtype),
+                                                 name='new_item_bias')
+                self.needs_init.add(self.new_item_bias)
+                self.item_biases_var = tf.concat([tf.zeros([1, 1], dtype=dtype),
+                                                  self.new_item_bias,
+                                                  self.item_biases_var],
+                                                 1)
 
-        # For conveniance, let's concat the biases onto the end of the factor vectors.
-        self.U_concat_bias_var = tf.concat([self.U_var,
-                                            self.user_biases_var,
-                                            tf.ones([tf.shape(self.U_var)[0], 1], dtype=dtype)],
-                                           1,
-                                           name="user_factors_concat_user_biases")
-        self.V_concat_bias_var = tf.concat([self.V_var,
-                                            tf.ones([1, tf.shape(self.V_var)[1]], dtype=dtype),
-                                            self.item_biases_var],
-                                           0,
-                                           name="item_factors_concat_item_biases")
+        with tf.name_scope("model"):
+            # For conveniance, let's concat the biases onto the end of the factor vectors.
+            self.U_concat_bias_var = tf.concat([self.U_var,
+                                                self.user_biases_var,
+                                                tf.ones([tf.shape(self.U_var)[0], 1], dtype=dtype)],
+                                               1)
+            self.V_concat_bias_var = tf.concat([self.V_var,
+                                                tf.ones([1, tf.shape(self.V_var)[1]], dtype=dtype),
+                                                self.item_biases_var],
+                                               0)
 
-        # The model:
-        self.centered_reconstruction_op = tf.matmul(self.U_concat_bias_var, self.V_concat_bias_var,
-                                                    name="centered_reconstruction")
+            # The model:
+            self.centered_reconstruction_op = tf.matmul(self.U_concat_bias_var, self.V_concat_bias_var)
 
-        # For training, we don't need the whole reconstruction matrix above. We
-        # only need the indices of the user/item pairs for which we have _known_
-        # ratings. The numpy-equivalent of the tf code below would be:
-        #   reconstruction_gather_ratings = reconstruction[user_indices, item_indices]
-        # See:
-        #   https://github.com/tensorflow/tensorflow/issues/206
-        #   https://github.com/tensorflow/tensorflow/issues/418
-        self.centered_reconstruction_gather_ratings_op = tf.gather(
-                    tf.reshape(self.centered_reconstruction_op, [-1]),
-                    self.user_indices_placeholder * tf.shape(self.centered_reconstruction_op)[1]
-                                                              + self.item_indices_placeholder,
-                    name="centered_reconstruction_gather_ratings")
+            # For training, we don't need the whole reconstruction matrix above. We
+            # only need the indices of the user/item pairs for which we have _known_
+            # ratings. The numpy-equivalent of the tf code below would be:
+            #   reconstruction_gather_ratings = reconstruction[user_indices, item_indices]
+            # See:
+            #   https://github.com/tensorflow/tensorflow/issues/206
+            #   https://github.com/tensorflow/tensorflow/issues/418
+            self.centered_reconstruction_gather_ratings_op = tf.gather(
+                        tf.reshape(self.centered_reconstruction_op, [-1]),
+                        self.user_indices_placeholder * tf.shape(self.centered_reconstruction_op)[1]
+                                                                  + self.item_indices_placeholder)
 
-        # Add the average rating to the centered reconstruciton, to make it a non-centered reconstruction.
-        self.reconstruction_gather_ratings_op = tf.add(self.centered_reconstruction_gather_ratings_op,
-                                                       self.mu_placeholder,
-                                                       name="reconstruction_gather_ratings")
+            # Add the average rating to the centered reconstruciton, to make it a non-centered reconstruction.
+            self.reconstruction_gather_ratings_op = tf.add(self.centered_reconstruction_gather_ratings_op,
+                                                           self.mu_placeholder)
 
-        # Calculate the reconstruction residuals.
-        self.residual_op = tf.subtract(self.reconstruction_gather_ratings_op,
-                                       self.rating_array_placeholder,
-                                       name="residuals")
+        with tf.name_scope("loss_function"):
+            with tf.name_scope("error_metrics"):
+                # Calculate the reconstruction residuals.
+                self.residual_op = tf.subtract(self.reconstruction_gather_ratings_op,
+                                               self.rating_array_placeholder)
 
-        # Calculate the RSS (residual sum of squares), MSE (mean squared error), and the RMSE (root mean squared error).
-        self.rss_op = tf.reduce_sum(tf.square(self.residual_op), name="rss")
-        self.mse_op = tf.divide(self.rss_op, tf.cast(tf.shape(self.rating_array_placeholder)[0], dtype=dtype), name="mse")
-        self.rmse_op = tf.sqrt(self.mse_op, name="rmse")
+                # Calculate the RSS (residual sum of squares), MSE (mean squared error), and the RMSE (root mean squared error).
+                with tf.name_scope('rss'):
+                    self.rss_op = tf.reduce_sum(tf.square(self.residual_op))
+                with tf.name_scope('mse'):
+                    self.mse_op = tf.divide(self.rss_op, tf.cast(tf.shape(self.rating_array_placeholder)[0], dtype=dtype))
+                with tf.name_scope('rmse'):
+                    self.rmse_op = tf.sqrt(self.mse_op)
 
-        # Declare the factor regularizer!!!
-        self.U_square_op = tf.square(self.U_var)
-        self.U_sum_rows_op = tf.reduce_sum(self.U_square_op, 1)
-        self.U_sum_penalty_op = tf.reduce_sum(tf.gather(self.U_sum_rows_op, self.user_indices_placeholder))
-        self.V_square_op = tf.square(self.V_var)
-        self.V_sum_cols_op = tf.reduce_sum(self.V_square_op, 0)
-        self.V_sum_penalty_op = tf.reduce_sum(tf.gather(self.V_sum_cols_op, self.item_indices_placeholder))
-        self.factor_regularizer_op = tf.multiply(tf.add(self.U_sum_penalty_op, self.V_sum_penalty_op), self.lambda_factors_placeholder,
-                                                 name="factor_regularizer")
+            with tf.name_scope("factor_regularization"):
+                # Declare the factor regularizer!!!
+                self.U_square_op = tf.square(self.U_var)
+                self.U_sum_rows_op = tf.reduce_sum(self.U_square_op, 1)
+                self.U_sum_penalty_op = tf.reduce_sum(tf.gather(self.U_sum_rows_op, self.user_indices_placeholder))
+                self.V_square_op = tf.square(self.V_var)
+                self.V_sum_cols_op = tf.reduce_sum(self.V_square_op, 0)
+                self.V_sum_penalty_op = tf.reduce_sum(tf.gather(self.V_sum_cols_op, self.item_indices_placeholder))
+                self.factor_regularizer_op = tf.multiply(tf.add(self.U_sum_penalty_op, self.V_sum_penalty_op), self.lambda_factors_placeholder)
 
-        # Declare the biases regularizer!!!
-        self.user_biases_square_op = tf.square(self.user_biases_var)
-        self.user_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.user_biases_square_op, [-1]), self.user_indices_placeholder))
-        self.item_biases_square_op = tf.square(self.item_biases_var)
-        self.item_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.item_biases_square_op, [-1]), self.item_indices_placeholder))
-        self.bias_regularizer_op = tf.multiply(tf.add(self.user_biases_sum_op, self.item_biases_sum_op), self.lambda_biases_placeholder,
-                                               name="bias_regularizer")
+            with tf.name_scope("bias_regularization"):
+                # Declare the biases regularizer!!!
+                self.user_biases_square_op = tf.square(self.user_biases_var)
+                self.user_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.user_biases_square_op, [-1]), self.user_indices_placeholder))
+                self.item_biases_square_op = tf.square(self.item_biases_var)
+                self.item_biases_sum_op = tf.reduce_sum(tf.gather(tf.reshape(self.item_biases_square_op, [-1]), self.item_indices_placeholder))
+                self.bias_regularizer_op = tf.multiply(tf.add(self.user_biases_sum_op, self.item_biases_sum_op), self.lambda_biases_placeholder)
 
-        # Declare the cost function!!!
-        self.cost_op = tf.add(self.rss_op, tf.add(self.factor_regularizer_op, self.bias_regularizer_op), name="cost")
+            # Declare the cost function!!!
+            self.loss_op = tf.add(self.rss_op, tf.add(self.factor_regularizer_op, self.bias_regularizer_op), name="loss")
 
-        # TensorFlow's magic graident descent optimization:
-        self.optimizer = tf.train.GradientDescentOptimizer(self.alpha_placeholder)
-        self.train_step_op          = self.optimizer.minimize(self.cost_op)
-        self.train_step_new_user_op = self.optimizer.minimize(self.cost_op,
-                                                              var_list=[self.U_new_entry,
-                                                                        self.new_user_bias])
+        with tf.name_scope("optimizer"):
+            # TensorFlow's magic graident descent optimization:
+            self.optimizer = tf.train.GradientDescentOptimizer(self.alpha_placeholder)
+            self.train_step_op          = self.optimizer.minimize(self.loss_op)
+            self.train_step_new_user_op = self.optimizer.minimize(self.loss_op,
+                                                                  var_list=[self.U_new_entry,
+                                                                            self.new_user_bias])
 
-    def _init_variables(self):
-        """Private helper to init the TensorFlow globals."""
+        # Operations to init the global tf variables:
+        with tf.name_scope("variable_initializers"):
+            self.init_new_user_op = tf.variables_initializer({self.U_new_entry, self.new_user_bias})
+            self.init_all_op = tf.variables_initializer(self.needs_init)
 
+        # Start the TensorFlow session and initialize the variables.
+        if self.sess is None:
+            self.sess = tf.Session()
+            if verbose:
+                log.info("instantiated a new TensorFlow session")
         init_params_dict = {
             self.init_factor_mean_placeholder: self.init_factor_mean,
             self.init_factor_stddev_placeholder: self.init_factor_stddev
         }
-
-        init_op = tf.variables_initializer(self.needs_init)
-        self.sess.run(init_op, feed_dict=init_params_dict)
+        self.sess.run(self.init_all_op, feed_dict=init_params_dict)
 
     def _run_gradient_descent(self, tf_step_op,
                               user_indices, item_indices, rating_array,
